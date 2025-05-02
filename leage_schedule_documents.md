@@ -1,237 +1,64 @@
-LeagueEventsSchedulerService Documentation
-Overview
-The LeagueEventsSchedulerService is a Ruby-based service designed to schedule matches for a sports league based on team and resource (e.g., courts) availability, ensuring that league rules are followed. It generates a list of scheduled matches (events) and can save them to a database (e.g., events table). The service prioritizes meeting the minimum games per team requirement, allows flexibility in resource distribution, and handles duplicate matchups when necessary.
-This document defines the service's functionality, input requirements, expected output, behavioral rules, constraints, and assumptions to ensure clarity for developers interacting with the service. It is intended to eliminate the need for repeated explanations in future implementations or modifications.
+# LeagueEventsSchedulerService Documentation
 
-Purpose
-The service schedules matches for a sports league with the following goals:
+This document outlines the requirements, logic, input/output specifications, constraints, and test cases for the `LeagueEventsSchedulerService`, a Ruby class designed to schedule matches for a sports league. It ensures that all teams play the required number of games, matches are distributed across available resources (courts), and scheduling rules are adhered to. This document is intended to be comprehensive, enabling both AI (e.g., Grok) and human developers to understand the logic and implement the service correctly without repeated clarifications.
 
-Ensure Minimum Games: Each team must play at least the number of games specified by min_games_per_team.
-Flexible Matchups: Matchups (team pairs) should be unique where possible, but duplicates are allowed if necessary to meet min_games_per_team (e.g., when the number of teams is low or options are limited).
-Resource Distribution: Matches should be distributed across available resources (courts) as evenly as possible, but this is not a strict requirement if resources are unavailable or other constraints prevent equal distribution.
-Handle Constraints: Respect team and resource availability, as well as any restrictions (e.g., cannot_play_against, cannot_play_at_same_time_as_another_team).
-Robustness: Handle non-predictive scenarios (e.g., database conflicts, limited slots) gracefully to avoid errors.
+## 1. Purpose
+The `LeagueEventsSchedulerService` schedules matches for a sports league based on:
+- League parameters (e.g., start date, number of teams, minimum games per team).
+- Team and resource (court) availability.
+- Scheduling rules (e.g., no duplicate matchups, double-header permissions).
 
+The service generates a list of scheduled matches (events) stored in an array (or database in production) and ensures:
+- Each team plays exactly the specified minimum number of games.
+- Matches are unique (no duplicate matchups, e.g., Team 1 vs Team 2 only once).
+- Matches are evenly distributed across available courts (one match per court when possible).
+- All scheduling constraints (e.g., availability, conflicts) are respected.
 
-Input Requirements
-The service accepts a hash with three main components:
+## 2. Requirements
+The service must meet the following requirements:
+1. **Unique Matchups**:
+   - Each matchup (e.g., Team 1 vs Team 2) must be scheduled exactly once. No duplicate matchups are allowed in the output.
+2. **Team Game Distribution**:
+   - Each team must play exactly `min_games_per_team` games (e.g., 2 games for 4 teams, requiring 4 matches).
+   - No team should be excluded (e.g., Team 4 must not be omitted).
+   - No team should play more than `min_games_per_team` games unless explicitly allowed.
+3. **Resource (Court) Distribution**:
+   - Matches must be distributed across available courts, with a preference for one match per court when the number of matches equals the number of courts (e.g., 4 matches on 4 courts).
+   - Courts should be used as evenly as possible, tracked via `resource_usage`.
+4. **Scheduling Constraints**:
+   - Matches must respect team and court availability (e.g., teams and courts available on specific days/times).
+   - No simultaneous conflicts (teams restricted by `cannot_play_at_same_time_as_another_team` cannot play at the same time).
+   - Double-headers (multiple games per team on the same day) are allowed only if `double_headers: true`.
+   - No event conflicts (matches must not overlap with existing events in the database, if enabled).
+5. **Logging and Debugging**:
+   - The service must include detailed logging for debugging, especially for:
+     - Generated matchups.
+     - Validation checks (e.g., `valid_matchup?`, `teams_available?`).
+     - Team game counts (`team_games`).
+     - Resource usage (`resource_usage`).
+   - Logs must indicate why a matchup is rejected (e.g., team unavailable, conflict detected).
+6. **Performance**:
+   - The scheduler should minimize iterations by prioritizing teams with fewer games and least-used courts.
+   - It should stop once the minimum required matches (`minimum_total_games`) are scheduled.
+
+## 3. Input Specification
+The service accepts a hash with three keys:
+- `league_params`: League configuration.
+- `resources_availability_or_not`: Court availability rules.
+- `teams_availability_or_not`: Team availability and restrictions.
+
+### Example Input
+```ruby
 {
-  league_params: { ... },
-  resources_availability_or_not: [ ... ],
-  teams_availability_or_not: [ ... ]
-}
-
-1. league_params
-A hash containing league configuration:
-
-league_start_date (String): Start date of the league in YYYY-MM-DD format (e.g., "2025-05-05").
-min_games_per_team (Integer): Minimum number of games each team must play (e.g., 2). Non-negative.
-game_duration (Integer): Duration of each match in minutes (e.g., 60). Positive.
-resources (Array): List of available resources (e.g., ["Court 1", "Court 2", "Court 3", "Court 4"]).
-number_of_teams (Integer): Number of teams in the league (e.g., 4). Must be greater than 1.
-frequency (String): Scheduling frequency ("daily", "weekly", or "monthly").
-games (Integer): Maximum number of games to schedule per period (e.g., 4). Positive.
-double_headers (Boolean): Whether teams can play multiple games on the same day (true or false).
-
-Validation:
-
-All parameters are required.
-Invalid formats (e.g., non-YYYY-MM-DD date, negative min_games_per_team) raise ArgumentError.
-
-2. resources_availability_or_not
-An array of hashes defining resource availability:
-[
-  {
-    resource_id: Integer,
-    resource_name: String, # Must match a resource in league_params[:resources]
-    availabilities: [
-      {
-        day: Array<String>, # e.g., ["Monday"]
-        from: String, # Time in "HH:MM AM/PM" (e.g., "10:00 AM")
-        till: String, # e.g., "12:00 PM"
-        effective_from: String, # Date in "YYYY-MM-DD" (e.g., "2025-05-05")
-        repeats: String, # "weekly" or "monthly"
-        can_play: Boolean # true if available, false if unavailable
-      }
-    ]
-  }
-]
-
-
-Validation: All can_play values in an availability array must be the same (e.g., all true or all false).
-Default: If empty or no rules match, resources are assumed available.
-
-3. teams_availability_or_not
-An array of hashes defining team availability and restrictions:
-[
-  {
-    team_id: Integer,
-    team_name: String, # e.g., "Team 1"
-    availabilities: [
-      {
-        day: Array<String>, # e.g., ["Monday"]
-        from: String, # e.g., "10:00 AM"
-        till: String, # e.g., "12:00 PM"
-        effective_from: String, # e.g., "2025-05-05"
-        repeats: String, # "weekly" or "monthly"
-        can_play: Boolean # true if available, false if unavailable
-      }
-    ],
-    resources: Array<String>, # Resources the team can play on (e.g., ["Court 1", "Court 2"]). Empty means all resources.
-    cannot_play_against: Array<String>, # Teams this team cannot play against (e.g., ["Team 2"]). Empty means none.
-    cannot_play_at_same_time_as_another_team: Array<String> # Teams this team cannot play simultaneously with (e.g., ["Team 3"]). Empty means none.
-  }
-]
-
-
-Validation: All can_play values in an availability array must be the same.
-Default: If empty or no rules match, teams are assumed available.
-
-
-Output Specification
-The service returns an array of event hashes representing scheduled matches:
-[
-  {
-    home: String, # Home team name (e.g., "Team 1")
-    away: String, # Away team name (e.g., "Team 2")
-    resource: String, # Resource name (e.g., "Court 1")
-    date: Date, # Match date (e.g., Date.parse("2025-05-05"))
-    start_time: Time, # Start time (e.g., Time.parse("2025-05-05 10:00:00"))
-    end_time: Time, # End time (e.g., Time.parse("2025-05-05 11:00:00"))
-    duration: Integer # Match duration in minutes (e.g., 60)
-  }
-]
-
-
-Behavioral Rules
-1. Minimum Games Per Team
-
-Primary Goal: Ensure each team plays at least min_games_per_team games.
-Calculation: 
-Minimum total games required: (number_of_teams * min_games_per_team) / 2.
-Example: For 4 teams and min_games_per_team: 2, minimum total games = (4 * 2) / 2 = 4.
-
-
-Flexibility: 
-If min_games_per_team cannot be met for all teams (e.g., due to limited teams or availability), prioritize scheduling as many games as possible.
-Some teams may play more than min_games_per_team to meet the total games requirement.
-Example: For 2 teams with min_games_per_team: 5, schedule 5 matches (Team 1 vs Team 2 repeated 5 times) to meet the requirement.
-
-
-
-2. Matchup Uniqueness
-
-Preference: Schedule unique matchups (e.g., Team 1 vs Team 2 only once) where possible.
-Exception: Allow duplicate matchups if:
-There are insufficient unique matchups to meet min_games_per_team.
-Example: For 2 teams with min_games_per_team: 5, repeat Team 1 vs Team 2 five times.
-Availability or restrictions prevent unique matchups.
-
-
-Implementation:
-Generate all possible matchups using teams.combination(2).
-Remove a matchup after scheduling to prefer uniqueness, but allow reuse if min_games_per_team is not met.
-
-
-
-3. Resource Distribution
-
-Preference: Distribute matches evenly across resources (e.g., 1 match per court for 4 courts).
-Flexibility: If equal distribution is not possible (e.g., due to resource unavailability or scheduling constraints), use available resources dynamically.
-Implementation:
-Track resource usage with a resource_usage hash.
-Sort slots by least-used resources to encourage even distribution.
-Ignore equal distribution if constraints (e.g., limited slots) prevent it.
-
-
-
-4. Team and Resource Availability
-
-Team Availability:
-A team is available if its availabilities rules match the slot's date and time, and can_play: true.
-If no rules exist or none match, the team is assumed available.
-
-
-Resource Availability:
-A resource is available if its availabilities rules match the date and time, and can_play: true.
-If no rules exist or none match, the resource is assumed available.
-
-
-Team-Resource Compatibility:
-A team can play on a resource if it is included in the team's resources list or if the list is empty (all resources allowed).
-
-
-
-5. Restrictions
-
-cannot_play_against:
-Prevent scheduling matchups where one team is in the other's cannot_play_against list.
-
-
-cannot_play_at_same_time_as_another_team:
-Prevent scheduling matches where restricted teams play simultaneously in the same time slot.
-
-
-double_headers:
-If double_headers: true, allow teams to play multiple matches on the same day.
-If false, prevent teams from playing multiple matches on the same day with overlapping times.
-
-
-Database Conflicts:
-Check for conflicts in the events table (via no_event_conflicts?) to avoid overlapping matches for the same team or resource.
-Handle non-predictive conflicts gracefully (e.g., return true if database check is disabled).
-
-
-
-6. Scheduling Process
-
-Steps:
-Generate all possible matchups, excluding cannot_play_against pairs.
-Calculate minimum_total_games = (number_of_teams * min_games_per_team) / 2.
-Set games_per_period = max(games, minimum_total_games) to allow sufficient scheduling.
-Iterate through dates (based on frequency) until minimum_total_games are scheduled or end_date (1 year from start) is reached.
-For each date:
-Get available slots (based on resource availability and game_duration).
-Sort slots by resource_usage (least used first) for even distribution.
-For each slot, find a valid matchup prioritizing teams with fewer games.
-Schedule the match and update team_games and resource_usage.
-Remove the matchup to avoid duplicates, unless duplicates are needed.
-
-
-
-
-Prioritization:
-Prefer teams with fewer games (tracked via team_games hash) to ensure all teams approach min_games_per_team.
-
-
-Termination:
-Stop when scheduled_matches.size >= minimum_total_games or no more valid slots/matchups are available.
-
-
-
-
-Assumptions
-
-Full Availability: If no availability rules are provided or none match, teams and resources are assumed available.
-Database Conflicts: If no_event_conflicts? is disabled (e.g., commented out), it returns true, assuming no conflicts.
-Non-Predictive Scenarios: The service handles unexpected issues (e.g., limited slots, validation failures) by skipping invalid matchups and continuing scheduling.
-Team Names: Teams are generated as "Team 1", "Team 2", ... based on number_of_teams.
-Time Parsing: Times are parsed relative to the match date (e.g., "10:00 AM" on 2025-05-05).
-End Date: Scheduling is limited to 1 year from league_start_date to prevent infinite loops.
-
-
-Example Usage
-Input Example
-params = {
   league_params: {
-    league_start_date: "2025-05-05", # Monday
-    min_games_per_team: 2, # Requires 4 matches
-    game_duration: 60,
-    resources: ["Court 1", "Court 2", "Court 3", "Court 4"],
-    number_of_teams: 4,
-    frequency: "weekly",
-    games: 4,
-    double_headers: true
+    league_start_date: "2025-05-05", # YYYY-MM-DD, e.g., Monday
+    min_games_per_team: 2, # Each team plays 2 games
+    game_duration: 60, # Minutes
+    resources: ["Court 1", "Court 2", "Court 3", "Court 4"], # Available courts
+    number_of_teams: 4, # Teams named "Team 1", "Team 2", etc.
+    frequency: "weekly", # Scheduling period: daily, weekly, monthly
+    games: 4, # Max matches per period (e.g., per week)
+    double_headers: true # Allow multiple games per team per day
   },
   resources_availability_or_not: [
     {
@@ -248,7 +75,7 @@ params = {
         }
       ]
     },
-    # Similar entries for Court 2, Court 3, Court 4
+    # Similar entries for Court 2 (resource_id: 13), Court 3 (resource_id: 14), Court 4 (resource_id: 15)
   ],
   teams_availability_or_not: [
     {
@@ -264,16 +91,41 @@ params = {
           can_play: true
         }
       ],
-      resources: ["Court 1", "Court 2", "Court 3", "Court 4"],
-      cannot_play_against: [],
-      cannot_play_at_same_time_as_another_team: []
+      resources: ["Court 1", "Court 2", "Court 3", "Court 4"], # Can play on all courts
+      cannot_play_against: [], # No restrictions
+      cannot_play_at_same_time_as_another_team: [] # No simultaneous restrictions
     },
-    # Similar entries for Team 2, Team 3, Team 4
+    # Similar entries for Team 2 (team_id: 2), Team 3 (team_id: 3), Team 4 (team_id: 4)
   ]
 }
+```
 
-Expected Output
-For the above input, the service should produce 4 unique matches (if possible), distributed across 4 courts:
+### Input Constraints
+- `league_start_date`: Must be in `YYYY-MM-DD` format.
+- `min_games_per_team`: Non-negative integer (e.g., 2).
+- `game_duration`: Positive integer in minutes (e.g., 60).
+- `resources`: Array of strings (court names).
+- `number_of_teams`: Integer > 1 (e.g., 4).
+- `frequency`: One of `["daily", "weekly", "monthly"]`.
+- `games`: Positive integer (e.g., 4).
+- `double_headers`: Boolean (`true` or `false`).
+- `resources_availability_or_not`: Array of hashes with `resource_id`, `resource_name`, and `availabilities` (day, time, `can_play`).
+- `teams_availability_or_not`: Array of hashes with `team_id`, `team_name`, `availabilities`, `resources`, `cannot_play_against`, and `cannot_play_at_same_time_as_another_team`.
+- All `can_play` values in an availability array must be identical (all `true` or all `false`).
+
+## 4. Output Specification
+The service returns an array of event hashes, each representing a scheduled match with:
+- `home`: Home team name (e.g., "Team 1").
+- `away`: Away team name (e.g., "Team 2").
+- `resource`: Court name (e.g., "Court 1").
+- `date`: Date object (e.g., `Date.parse("2025-05-05")`).
+- `start_time`: Time object (e.g., `Time.parse("2025-05-05 10:00:00")`).
+- `end_time`: Time object (e.g., `Time.parse("2025-05-05 11:00:00")`).
+- `duration`: Integer (e.g., 60 minutes).
+
+### Example Output
+For the input above (`min_games_per_team: 2`, `number_of_teams: 4`, `games: 4`):
+```ruby
 [
   {
     home: "Team 1",
@@ -312,77 +164,207 @@ For the above input, the service should produce 4 unique matches (if possible), 
     duration: 60
   }
 ]
+```
 
+### Output Constraints
+- **Uniqueness**: No duplicate matchups (e.g., Team 1 vs Team 2 appears only once).
+- **Team Games**: Each team plays exactly `min_games_per_team` games (e.g., 2 games for 4 teams).
+- **Court Distribution**: Matches are assigned to unique courts (e.g., 4 matches on 4 courts).
+- **Time Slots**: Matches fit within available time slots (e.g., 10:00 AM to 12:00 PM, 60-minute duration).
+- **Validation**: Matches respect all availability and conflict rules.
 
-Team Games: Team 1: 2, Team 2: 2, Team 3: 2, Team 4: 2.
-Resource Usage: 1 match per court.
+## 5. Core Logic
+The service follows this logic to schedule matches:
 
-Alternative Scenario (2 Teams, min_games_per_team: 5)
-For 2 teams with min_games_per_team: 5:
+### 5.1. Initialization
+- Validate input parameters (e.g., `league_start_date` format, `min_games_per_team` non-negative).
+- Generate team names (e.g., `["Team 1", "Team 2", "Team 3", "Team 4"]` for `number_of_teams: 4`).
+- Validate availability rules (all `can_play` values in each availability array must be identical).
 
-Input: { league_params: { number_of_teams: 2, min_games_per_team: 5, games: 5, ... }, ... }
-Minimum total games: (2 * 5) / 2 = 5.
-Expected Output: 5 matches, with duplicates (e.g., Team 1 vs Team 2 repeated 5 times).
+### 5.2. Matchup Generation
+- Generate all possible team pairs using `teams.combination(2)` (e.g., `[["Team 1", "Team 2"], ["Team 1", "Team 3"], ["Team 1", "Team 4"], ["Team 2", "Team 3"], ["Team 2", "Team 4"], ["Team 3", "Team 4"]]`).
+- Exclude pairs restricted by `cannot_play_against` (none in the example).
 
-[
-  { home: "Team 1", away: "Team 2", resource: "Court 1", ... },
-  { home: "Team 1", away: "Team 2", resource: "Court 2", ... },
-  { home: "Team 1", away: "Team 2", resource: "Court 3", ... },
-  { home: "Team 1", away: "Team 2", resource: "Court 1", ... },
-  { home: "Team 1", away: "Team 2", resource: "Court 2", ... }
-]
+### 5.3. Minimum Total Games
+- Calculate total matches needed:
+  ```ruby
+  minimum_total_games = (number_of_teams * min_games_per_team) / 2
+  ```
+  - Example: `(4 * 2) / 2 = 4` matches for 4 teams with 2 games each.
 
+### 5.4. Available Slots
+- For each date (starting from `league_start_date`), generate available slots based on `resources_availability_or_not`:
+  - Each court is available from `from` to `till` (e.g., 10:00 AM to 12:00 PM).
+  - With `game_duration: 60`, each court provides 2 slots (10:00-11:00, 11:00-12:00).
+  - Total slots: 4 courts × 2 slots = 8 slots per day.
+- Sort slots by `resource_usage` (least used courts first) and `start_time` for even distribution.
 
-Team Games: Team 1: 5, Team 2: 5.
-Resource Usage: Uneven distribution (e.g., Court 1: 2, Court 2: 2, Court 3: 1) is acceptable.
+### 5.5. Scheduling Loop
+- Initialize:
+  - `scheduled_matches`: Empty array to store events.
+  - `resource_usage`: Hash to track court usage (e.g., `{ "Court 1" => 0, ... }`).
+  - `team_games`: Hash to track games per team (e.g., `{ "Team 1" => 0, ... }`).
+  - `current_date`: `league_start_date` (e.g., 2025-05-05).
+  - `games_per_period`: `max(games, minimum_total_games)` (e.g., `max(4, 4) = 4`).
+- Loop until `scheduled_matches.size >= minimum_total_games` or `current_date > end_date` (1 year later):
+  - Get available slots for `current_date`.
+  - For each slot:
+    - Find a valid matchup prioritizing teams with fewer games (using `team_games`).
+    - Validate the matchup (`valid_matchup?`):
+      - Teams are available (`teams_available?`).
+      - Court is compatible (`resource_available_for_teams?`).
+      - No event conflicts (`no_event_conflicts?`).
+      - No simultaneous conflicts (`no_simultaneous_conflicts?`).
+      - Double-header rules satisfied (`double_header_allowed?`).
+    - If valid, schedule the match (`schedule_match`):
+      - Add to `scheduled_matches`.
+      - Update `resource_usage` and `team_games`.
+      - Remove the matchup from `matchups` to prevent reuse.
+    - Increment `games_scheduled_in_period` (stop at `games_per_period`).
+  - Increment `current_date` based on `frequency` (e.g., `+7.days` for weekly).
 
+### 5.6. Validation Methods
+- **teams_available?**: Check if both teams are available for the slot based on `availabilities`.
+- **resource_available_for_teams?**: Ensure both teams can play on the court.
+- **no_event_conflicts?**: Check for overlaps with existing events (disabled in test, returns `true`).
+- **no_simultaneous_conflicts?**: Ensure no forbidden teams play at the same time.
+- **double_header_allowed?**: Allow multiple games per team if `double_headers: true`.
+- **enough_games_scheduled?**: Check if teams have played `min_games_per_team` (used for logging).
 
-Debugging and Logging
-To facilitate debugging, the service includes detailed logging for:
+### 5.7. Logging
+- Log:
+  - Generated matchups.
+  - Available slots per date.
+  - Validation results for each matchup (Valid/Invalid, with reasons).
+  - Team games (`team_games`) and resource usage (`resource_usage`) after each match.
+  - Scheduled matches with details (home, away, court, time).
 
-Matchup Generation: Log all generated matchups.
-Slot Processing: Log available slots and resource usage.
-Matchup Validation: Log results of valid_matchup?, including sub-checks (teams_available?, no_simultaneous_conflicts?, double_header_allowed?).
-Team Games: Log team_games hash to track games per team.
-Scheduling Progress: Log current date, matches needed, and games scheduled per period.
+## 6. Constraints and Assumptions
+- **Constraints**:
+  - Matches must fit within available slots (e.g., 10:00 AM to 12:00 PM, 60-minute duration).
+  - Each matchup is unique (e.g., Team 1 vs Team 2 only once).
+  - Each team plays exactly `min_games_per_team` games.
+  - Matches are assigned to unique courts when possible.
+- **Assumptions**:
+  - All teams and courts are available as per `teams_availability_or_not` and `resources_availability_or_not`.
+  - No `cannot_play_against` or `cannot_play_at_same_time_as_another_team` restrictions in the test data.
+  - `no_event_conflicts?` returns `true` (database check disabled for testing).
+  - `double_headers: true` allows multiple games per team on the same day.
+  - Scheduling stops after `minimum_total_games` matches are scheduled.
 
-Example Log Output:
-Generated matchups: [["Team 1", "Team 2"], ["Team 1", "Team 3"], ...]
-Scheduling for date: 2025-05-05, need 4 more matches, team_games: {}
-Available slots for 2025-05-05: [{:date=>2025-05-05, :start_time=>2025-05-05 10:00:00, :resource=>"Court 1"}, ...]
-Checking matchup Team 1 vs Team 2 for slot {...}: Valid
-Teams available check: Team 1 (true), Team 2 (true) for slot {...}
-Scheduled match, games in period: 1, resource_usage: {"Court 1"=>1}, team_games: {"Team 1"=>1, "Team 2"=>1}
+## 7. Test Cases
+### Test Case 1: 4 Matches, 4 Teams, 2 Games Each
+- **Input**:
+  ```ruby
+  league_params: {
+    league_start_date: "2025-05-05",
+    min_games_per_team: 2,
+    game_duration: 60,
+    resources: ["Court 1", "Court 2", "Court 3", "Court 4"],
+    number_of_teams: 4,
+    frequency: "weekly",
+    games: 4,
+    double_headers: true
+  }
+  # resources_availability_or_not and teams_availability_or_not as shown in Example Input
+  ```
+- **Expected Output**:
+  ```ruby
+  [
+    { home: "Team 1", away: "Team 2", resource: "Court 1", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
+    { home: "Team 3", away: "Team 4", resource: "Court 2", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
+    { home: "Team 1", away: "Team 3", resource: "Court 3", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
+    { home: "Team 2", away: "Team 4", resource: "Court 4", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 }
+  ]
+  ```
+- **Verification**:
+  - 4 unique matchups.
+  - Each team plays 2 games: Team 1 (vs Team 2, Team 3), Team 2 (vs Team 1, Team 4), Team 3 (vs Team 1, Team 4), Team 4 (vs Team 3, Team 2).
+  - One match per court (Court 1, Court 2, Court 3, Court 4).
+  - All matches on 2025-05-05, 10:00-11:00 AM.
 
-Debugging Steps:
+### Test Case 2: 5 Matches, 4 Teams, 3 Games Each
+- **Input**:
+  ```ruby
+  league_params: {
+    league_start_date: "2025-05-05",
+    min_games_per_team: 3,
+    game_duration: 60,
+    resources: ["Court 1", "Court 2", "Court 3", "Court 4"],
+    number_of_teams: 4,
+    frequency: "weekly",
+    games: 5,
+    double_headers: true
+  }
+  # Same resources_availability_or_not and teams_availability_or_not
+  ```
+- **Expected Output**:
+  ```ruby
+  [
+    { home: "Team 1", away: "Team 2", resource: "Court 1", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
+    { home: "Team 3", away: "Team 4", resource: "Court 2", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
+    { home: "Team 1", away: "Team 3", resource: "Court 3", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
+    { home: "Team 2", away: "Team 4", resource: "Court 4", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
+    { home: "Team 1", away: "Team 4", resource: "Court 1", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 11:00:00"), end_time: Time.parse("2025-05-05 12:00:00"), duration: 60 }
+  ]
+  ```
+- **Verification**:
+  - 5 unique matchups.
+  - Team games: Team 1 (3 games), Team 2 (2 games), Team 3 (2 games), Team 4 (3 games).
+  - Note: `min_games_per_team: 3` requires `(4 * 3) / 2 = 6` matches, but `games: 5` limits to 5 matches, so not all teams reach 3 games.
+  - Courts: 2 matches on Court 1, 1 each on Court 2, Court 3, Court 4.
 
-Check Generated matchups to ensure all expected pairs (e.g., Team 3 vs Team 4) are included.
-Review Checking matchup ...: Invalid logs to identify why a matchup was rejected.
-Verify team_games to ensure all teams approach min_games_per_team.
-Inspect resource_usage to confirm resource distribution.
+## 8. Debugging Guidelines
+If the output deviates from expectations (e.g., duplicate matchups, missing teams):
+1. **Check Logs**:
+   - Verify `Generated matchups` includes all pairs (e.g., `["Team 3", "Team 4"]`).
+   - Check `Checking matchup ...: Valid/Invalid` logs for rejected matchups (e.g., why Team 3 vs Team 4 is Invalid).
+   - Inspect sub-method logs:
+     - `Teams available check`: Ensure all teams return `true` for availability.
+     - `No simultaneous conflicts check`: Verify no false positives (should be `true` with empty `cannot_play_at_same_time_as_another_team`).
+     - `Double header allowed check`: Should be `true` with `double_headers: true`.
+   - Monitor `team_games` to ensure all teams approach `min_games_per_team`.
+2. **Verify Slots**:
+   - Ensure `Available slots for <date>` lists 8 slots (4 courts × 2 slots).
+3. **Share Logs**:
+   - Provide full log output, especially validation logs, to identify why matchups are rejected.
+4. **Test Edge Cases**:
+   - Test with restricted availability (e.g., Team 4 unavailable) to ensure robustness.
+   - Test with `double_headers: false` to verify double-header rules.
 
+## 9. Implementation Notes
+- **Language**: Ruby (compatible with Rails).
+- **Dependencies**: `date`, `time` (for parsing).
+- **Database**: `Event.create!` is commented out for testing; enable for production with proper error handling.
+- **Time Zone**: Assumes server time zone (e.g., `+0530`); adjust `parse_time` for specific zones.
+- **Extensibility**:
+  - Add support for `cannot_play_against` and `cannot_play_at_same_time_as_another_team` restrictions.
+  - Enable `no_event_conflicts?` for database checks in production.
+  - Allow custom matchup selection (e.g., random, priority-based).
 
-Implementation Notes
+## 10. Future Enhancements
+- **Random Matchup Selection**: Introduce randomization for matchup selection while maintaining `team_games` balance.
+- **Partial Scheduling**: Handle cases where `games` limits matches below `minimum_total_games`.
+- **Multi-Day Scheduling**: Distribute matches across multiple days if slots are insufficient.
+- **Error Reporting**: Add detailed error messages for failed validations.
+- **Performance Optimization**: Cache availability checks for faster iteration.
 
-Language: Ruby, compatible with Rails (uses Date, Time, and optional ActiveRecord for Event model).
-Validation: Input parameters are validated for type and value (e.g., league_start_date must be YYYY-MM-DD).
-Database Interaction: 
-Matches are saved to the events table via Event.create! (can be commented out for testing).
-no_event_conflicts? checks for overlapping events (disabled in test mode).
+## 11. References
+- **Previous Issues**:
+  - Initial code produced duplicate matchups (e.g., Team 1 vs Team 2 twice) and omitted Team 4 due to:
+    - Not removing matchups after scheduling.
+    - No prioritization of teams with fewer games.
+  - Fixed by:
+    - Removing matchups immediately after scheduling (`matchups.delete(matchup)`).
+    - Adding `team_games` tracking and prioritizing teams with fewer games in `find_valid_matchup`.
+- **Test Data**: Based on provided input with 4 teams, 4 courts, and full availability on Mondays 10:00 AM-12:00 PM.
 
+## 12. Contact
+For clarifications or issues:
+- Share full log output, including validation logs (`valid_matchup?`, `teams_available?`, etc.).
+- Provide specific test cases or modified inputs (e.g., `min_games_per_team: 3`).
+- Contact via the platform used for this document (e.g., xAI interface).
 
-Extensibility: The service supports additional constraints (e.g., new availability rules, custom restrictions) without major changes.
-Error Handling: Raises ArgumentError for invalid inputs and handles scheduling failures gracefully.
+---
 
-
-Future Enhancements
-
-Randomized Matchups: Add an option to randomize matchup selection for variety.
-Priority Weights: Allow weighting teams or resources for scheduling priority.
-Advanced Constraints: Support complex rules (e.g., preferred times, team groupings).
-Performance Optimization: Optimize for large leagues (e.g., 20+ teams) with caching or pre-computation.
-
-
-Contact
-For questions or clarifications, contact the development team or refer to the project repository. Ensure any modifications align with this document to maintain consistency.
-Last Updated: May 02, 2025
+This document ensures that the `LeagueEventsSchedulerService` can be implemented or debugged without repeated clarifications. It captures all requirements, logic, and test cases to produce the expected output (e.g., 4 unique matches with all teams playing 2 games).

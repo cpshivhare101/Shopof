@@ -520,4 +520,307 @@ Return Type: [Array<Hash>] List of scheduled matches, each with home, away, reso
   #   ]
 def ...
 
+############################################################
+
+
+
+
+# LeagueEventsSchedulerService handles the scheduling of league matches based on provided parameters.
+# It ensures each team plays the minimum required games, respects availability, double headers, and avoids conflicts.
+class LeagueEventsSchedulerService
+  # Initializes the service with league parameters and availability rules.
+  # @param league_params [Hash] League configuration (e.g., league_start_date, number_of_teams, double_headers).
+  # @param resources_availability_or_not [Array<Hash>] Resource availability rules (e.g., day, from, till).
+  # @param teams_availability_or_not [Array<Hash>] Team availability rules (e.g., day, from, till, resources).
+  def initialize(league_params, resources_availability_or_not, teams_availability_or_not)
+    # Store input parameters
+    @league_params = league_params
+    @resources_availability = resources_availability_or_not || []
+    @teams_availability = teams_availability_or_not || []
+    
+    # Set defaults for league parameters
+    @start_date = Date.parse(league_params[:league_start_date] || Date.today.to_s)
+    @end_date = Date.parse(league_params[:end_date] || (@start_date + 90).to_s)
+    @min_games = league_params[:min_games_per_team] || 5
+    @game_duration = league_params[:game_duration] || 60
+    @number_of_teams = league_params[:number_of_teams] or raise "number_of_teams is required"
+    @resources = league_params[:resources] or raise "resources is required"
+    @frequency = league_params[:games] || "daily"
+    @max_games_per_frequency = league_params[:team_can_play] || Float::INFINITY
+    @double_headers = league_params[:double_headers] || { apply: false, force: false, same_resource: false }
+    
+    # Generate team names (Team 1, Team 2, ...)
+    @teams = (1..@number_of_teams).map { |i| "Team #{i}" }
+    
+    # Initialize events table (in-memory simulation of database)
+    @events_table = []
+    
+    # Track games played per team
+    @games_played = Hash.new(0)
+  end
+
+  # Schedules matches for the league and returns the list of scheduled matches.
+  # Iterates through dates, checks availability, and applies double header rules.
+  # Return Type: [Array<Hash>] List of scheduled matches, each with home, away, resource, date, start_time, end_time, duration.
+  # Example:
+  #   [
+  #     {home: "Team 1", away: "Team 2", resource: "Court 1", date: Date.parse("2025-05-29"), start_time: Time.parse("2025-05-29 09:00:00"), end_time: Time.parse("2025-05-29 10:00:00"), duration: 60},
+  #     ...
+  #   ]
+  def schedule_matches
+    # Initialize scheduled matches array
+    scheduled_matches = []
+    
+    # Generate all possible team pairs
+    possible_pairs = generate_team_pairs
+    
+    # Iterate through dates until end_date or all teams meet min_games
+    current_date = @start_date
+    while current_date <= @end_date && @games_played.values.any? { |games| games < @min_games }
+      # Get available time slots for the current date
+      available_slots = generate_available_slots(current_date)
+      
+      # Shuffle pairs for fairness
+      possible_pairs.shuffle!
+      
+      # Track games in current frequency period (e.g., week)
+      games_in_frequency = Hash.new(0)
+      
+      # Try to schedule matches for each pair
+      possible_pairs.each do |home_team, away_team|
+        # Skip if both teams have enough games
+        next if @games_played[home_team] >= @min_games && @games_played[away_team] >= @min_games
+        
+        # Skip if frequency limit reached
+        next if games_in_frequency[home_team] >= @max_games_per_frequency || games_in_frequency[away_team] >= @max_games_per_frequency
+        
+        # Find a suitable slot for the match
+        match_scheduled = schedule_match(home_team, away_team, current_date, available_slots, games_in_frequency, scheduled_matches)
+        
+        # If double headers are mandatory and match wasn't scheduled, skip
+        next if @double_headers[:apply] && @double_headers[:force] && !match_scheduled
+      end
+      
+      # Move to next date based on frequency
+      current_date = next_date(current_date)
+    end
+    
+    # Return scheduled matches
+    scheduled_matches
+  end
+
+  private
+
+  # Generates all possible home-away team pairs, respecting cannot_play_against rules.
+  # Return Type: [Array<Array<String>>] List of [home_team, away_team] pairs.
+  # Example: [["Team 1", "Team 2"], ["Team 1", "Team 3"], ...]
+  def generate_team_pairs
+    pairs = []
+    @teams.each do |home_team|
+      @teams.each do |away_team|
+        next if home_team == away_team
+        # Check cannot_play_against restrictions
+        team_rules = @teams_availability.find { |rule| rule[:team] == home_team } || {}
+        cannot_play_against = team_rules[:cannot_play_against] || []
+        next if cannot_play_against.include?(away_team)
+        pairs << [home_team, away_team]
+      end
+    end
+    pairs
+  end
+
+  # Generates available time slots for a given date based on resource availability.
+  # @param date [Date] The date to check availability for.
+  # Return Type: [Array<Hash>] List of {resource, time_slot} hashes.
+  # Example: [{resource: "Court 1", time_slot: Time.parse("2025-05-29 09:00:00")}, ...]
+  def generate_available_slots(date)
+    slots = []
+    @resources.each do |resource|
+      # Default availability: 9:00 AM to 5:00 PM
+      resource_rules = @resources_availability.find { |rule| rule[:resource] == resource } || {}
+      availability = resource_rules[:availability] || [{ day: date.strftime("%A"), from: "09:00", till: "17:00", can_play: true }]
+      
+      availability.each do |rule|
+        next unless rule[:day] == date.strftime("%A") && rule[:can_play]
+        start_time = Time.parse("#{date} #{rule[:from]}")
+        end_time = Time.parse("#{date} #{rule[:till]}")
+        
+        # Generate slots in game_duration increments
+        current_time = start_time
+        while current_time + (@game_duration * 60) <= end_time
+          slots << { resource: resource, time_slot: current_time }
+          current_time += @game_duration * 60
+        end
+      end
+    end
+    slots
+  end
+
+  # Schedules a single match and handles double headers if applicable.
+  # @param home_team [String] Name of the home team.
+  # @param away_team [String] Name of the away team.
+  # @param date [Date] Date to schedule the match.
+  # @param available_slots [Array<Hash>] List of available {resource, time_slot} hashes.
+  # @param games_in_frequency [Hash] Tracks games played in current frequency period.
+  # @param scheduled_matches [Array<Hash>] List of scheduled matches (to append to).
+  # Return Type: [Boolean] True if match was scheduled, false otherwise.
+  def schedule_match(home_team, away_team, date, available_slots, games_in_frequency, scheduled_matches)
+    # Find a suitable slot
+    available_slots.each do |slot|
+      resource = slot[:resource]
+      time_slot = slot[:time_slot]
+      
+      # Check team availability
+      next unless team_available?(home_team, date, time_slot, resource)
+      next unless team_available?(away_team, date, time_slot, resource)
+      
+      # Check for conflicts in events table
+      next if has_conflict?(home_team, away_team, resource, time_slot, date)
+      
+      # Handle double headers
+      if @double_headers[:apply]
+        if @double_headers[:force]
+          # Mandatory double header: Must schedule back-to-back
+          double_header_scheduled = schedule_double_header(home_team, away_team, date, time_slot, resource, available_slots, games_in_frequency, scheduled_matches)
+          return false unless double_header_scheduled
+        else
+          # Optional double header: Schedule primary match and try double header
+          schedule_single_match(home_team, away_team, date, time_slot, resource, games_in_frequency, scheduled_matches)
+          schedule_double_header(home_team, away_team, date, time_slot, resource, available_slots, games_in_frequency, scheduled_matches)
+        end
+      else
+        # No double headers: Schedule single match
+        schedule_single_match(home_team, away_team, date, time_slot, resource, games_in_frequency, scheduled_matches)
+      end
+      
+      # Remove used slot
+      available_slots.delete(slot)
+      return true
+    end
+    false
+  end
+
+  # Schedules a single match and updates tracking.
+  # @param home_team [String] Name of the home team.
+  # @param away_team [String] Name of the away team.
+  # @param date [Date] Date of the match.
+  # @param time_slot [Time] Start time of the match.
+  # @param resource [String] Resource used.
+  # @param games_in_frequency [Hash] Tracks games played in current frequency period.
+  # @param scheduled_matches [Array<Hash>] List to append the match to.
+  # Return Type: [Hash] The scheduled match.
+  def schedule_single_match(home_team, away_team, date, time_slot, resource, games_in_frequency, scheduled_matches)
+    match = {
+      home: home_team,
+      away: away_team,
+      resource: resource,
+      date: date,
+      start_time: time_slot,
+      end_time: time_slot + (@game_duration * 60),
+      duration: @game_duration
+    }
+    scheduled_matches << match
+    @events_table << match
+    @games_played[home_team] += 1
+    @games_played[away_team] += 1
+    games_in_frequency[home_team] += 1
+    games_in_frequency[away_team] += 1
+    match
+  end
+
+  # Attempts to schedule a double header match for the home team.
+  # @param home_team [String] Name of the home team.
+  # @param away_team [String] Name of the first away team (to avoid in double header).
+  # @param date [Date] Date of the match.
+  # @param time_slot [Time] Start time of the first match.
+  # @param resource [String] Resource used for the first match.
+  # @param available_slots [Array<Hash>] List of available slots.
+  # @param games_in_frequency [Hash] Tracks games played in current frequency period.
+  # @param scheduled_matches [Array<Hash>] List to append the match to.
+  # Return Type: [Boolean] True if double header was scheduled, false otherwise.
+  def schedule_double_header(home_team, away_team, date, time_slot, resource, available_slots, games_in_frequency, scheduled_matches)
+    # Calculate next time slot for double header
+    next_time_slot = time_slot + (@game_duration * 60)
+    
+    # Determine resource for double header
+    double_header_resource = @double_headers[:same_resource] ? resource : nil
+    
+    # Find an opponent for the double header
+    @teams.each do |opponent|
+      next if opponent == home_team || opponent == away_team
+      next if @games_played[opponent] >= @min_games
+      next if games_in_frequency[opponent] >= @max_games_per_frequency
+      
+      # Find a suitable slot for double header
+      available_slots.each do |slot|
+        next unless slot[:time_slot] == next_time_slot
+        next unless double_header_resource.nil? || slot[:resource] == double_header_resource
+        
+        # Check availability and conflicts
+        next unless team_available?(home_team, date, next_time_slot, slot[:resource])
+        next unless team_available?(opponent, date, next_time_slot, slot[:resource])
+        next if has_conflict?(home_team, opponent, slot[:resource], next_time_slot, date)
+        
+        # Schedule double header match
+        schedule_single_match(home_team, opponent, date, next_time_slot, slot[:resource], games_in_frequency, scheduled_matches)
+        available_slots.delete(slot)
+        return true
+      end
+    end
+    false
+  end
+
+  # Checks if a team is available at a given date, time, and resource.
+  # @param team [String] Name of the team.
+  # @param date [Date] Date to check.
+  # @param time_slot [Time] Time to check.
+  # @param resource [String] Resource to check.
+  # Return Type: [Boolean] True if team is available, false otherwise.
+  def team_available?(team, date, time_slot, resource)
+    team_rules = @teams_availability.find { |rule| rule[:team] == team } || {}
+    availability = team_rules[:availability] || [{ day: date.strftime("%A"), from: "09:00", till: "17:00", can_play: true }]
+    allowed_resources = team_rules[:resources] || @resources
+    
+    # Check if resource is allowed
+    return false unless allowed_resources.include?(resource)
+    
+    # Check availability rules
+    availability.any? do |rule|
+      rule[:day] == date.strftime("%A") &&
+      Time.parse("#{date} #{rule[:from]}") <= time_slot &&
+      time_slot + (@game_duration * 60) <= Time.parse("#{date} #{rule[:till]}") &&
+      rule[:can_play]
+    end
+  end
+
+  # Checks for conflicts in the events table.
+  # @param home_team [String] Name of the home team.
+  # @param away_team [String] Name of the away team.
+  # @param resource [String] Resource to check.
+  # @param time_slot [Time] Time to check.
+  # @param date [Date] Date to check.
+  # Return Type: [Boolean] True if there is a conflict, false otherwise.
+  def has_conflict?(home_team, away_team, resource, time_slot, date)
+    @events_table.any? do |event|
+      event[:date] == date &&
+      event[:start_time] == time_slot &&
+      (event[:home] == home_team || event[:away] == home_team ||
+       event[:home] == away_team || event[:away] == away_team ||
+       event[:resource] == resource)
+    end
+  end
+
+  # Calculates the next date based on frequency.
+  # @param current_date [Date] Current date.
+  # Return Type: [Date] Next date for scheduling.
+  def next_date(current_date)
+    case @frequency
+    when "daily" then current_date + 1
+    when "weekly" then current_date + 7
+    when "monthly" then current_date >> 1
+    else current_date + 1
+    end
+  end
+end
+
 

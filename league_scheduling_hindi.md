@@ -504,4 +504,20 @@ END FUNCTION
 3. **कोड स्निपेट**: अगर आप इस स्यूडोकोड को किसी विशिष्ट प्रोग्रामिंग भाषा (जैसे Ruby, Python) में लागू करना चाहते हैं, तो मैं एक कार्यान्वयन प्रदान कर सकता हूँ।
 4. **अन्य**: अगर कोई और प्रारूप या जानकारी चाहिए, तो बताएं।
 
-आपके जवाब का इंतज़ार रहेगा!
+Please write service LeagueEventsSchedulerService in ruby that handle all logic and take params in input   def initialize(league_params, resources_availability_or_not, teams_availability_or_not)
+and provide output.
+
+- The service must be simple and not harder means try to make as possible as simple.
+- The service  can understable by human or ai and if required it can be modify easily
+- The service have each line comments that explain the logic and code. 
+- each method comment describe use of method by logically. and what take in input and what would be return type and example.
+like
+Return Type: [Array<Hash>] List of scheduled matches, each with home, away, resource, date, start_time, end_time, duration.
+  # Example:
+  #   [
+  #     {home: "Team 1", away: "Team 2", resource: "Court 1", date: #<Date: 2025-05-05>, start_time: 2025-05-05 10:00:00 +0530, end_time: 2025-05-05 11:00:00 +0530, duration: 60},
+  #     ...
+  #   ]
+def ...
+
+

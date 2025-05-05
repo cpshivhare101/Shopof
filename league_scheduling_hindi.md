@@ -22,7 +22,7 @@
 | `resources` | Array | उपलब्ध संसाधन (उदाहरण: ['Court 1', 'Court 2']) (अनिवार्य) | कोई डिफॉल्ट नहीं (अनिवार्य) |
 | `frequency` | String | मैच कितनी बार शेड्यूल होंगे (daily, weekly, monthly) | daily |
 | `games` | Number | प्रति `frequency` अवधि में कितने मैच | 8 |
-| `double_headers` | Object | बैक-टू-बैक मैचों के लिए नियम `{apply: Boolean, same_resource: Boolean}` | `{apply: false, same_resource: false}` |
+| `double_headers` | Object | बैक-टू-बैक मैचों के लिए नियम `{apply: Boolean, force: Boolean, same_resource: Boolean}` | `{apply: false, force: false, same_resource: false}` |
 | `end_date` | Date | लीग की अंतिम तारीख | `league_start_date + 90 days` |
 | `team_can_play` | Number | प्रति `frequency` अवधि में अधिकतम मैच (उदाहरण: 5 weekly → 5 मैच हफ्ते में) | कोई डिफॉल्ट नहीं |
 | `debug` | Boolean | डिबगिंग के लिए | false |
@@ -35,8 +35,10 @@
 
 ### डबल हेडर्स
 - `double_headers.apply: true` → बैक-टू-बैक मैच शेड्यूल करने की कोशिश होगी।
-- `double_headers.same_resource: true` → बैक-टू-बैक मैच एक ही संसाधन पर होंगे।
-- यह प्राथमिकता है, अनिवार्य नहीं। अगर कुछ टीमें उपलब्ध हैं, तो उनके लिए डबल हेडर्स शेड्यूल होंगे।
+- `double_headers.force: true` → बैक-टू-बैक मैच अनिवार्य होंगे। प्रत्येक टीम के लिए बैक-टू-बैक मैच शेड्यूल करना होगा, और अगर यह संभव नहीं है, तो सिस्टम उस टीम के लिए कोई मैच शेड्यूल नहीं करेगा या त्रुटि देगा।
+- `double_headers.force: false` → सिस्टम डबल हेडर शेड्यूल करने की कोशिश करेगा, लेकिन अगर यह संभव नहीं है, तो सामान्य मैच शेड्यूलिंग होगी।
+- `double_headers.same_resource: true` → बैक-टू-बैक मैच एक ही संसाधन पर होंगे। अगर `false`, तो अलग-अलग संसाधनों पर भी हो सकते हैं।
+- अगर `apply: false`, तो कोई डबल हेडर शेड्यूल नहीं होंगे, और `force` या `same_resource` का कोई प्रभाव नहीं होगा।
 
 ### उपलब्धता नियम (Availability Rules)
 `teams_availability_or_not` और `resources_availability_or_not` में उपलब्धता नियम शामिल हैं। प्रत्येक नियम में निम्नलिखित शामिल हैं:
@@ -83,19 +85,18 @@
 - `home`: होम टीम का नाम (उदाहरण: `Team 1`)।
 - `away`: अवे टीम का नाम (उदाहरण: `Team 2`)।
 - `resource`: उपयोग किया गया संसाधन (उदाहरण: `Court 1`)।
-- `date`: मैच की तारीख (उदाहरण: `Date.parse("2025-05-05")`)।
-- `start_time`: मैच शुरू होने का समय (उदाहरण: `Time.parse("2025-05-05 10:00:00")`)।
-- `end_time`: मैच खत्म होने का समय (उदाहरण: `Time.parse("2025-05-05 11:00:00")`)।
+- `date`: मैच की तारीख (उदाहरण: `Date.parse("2025-05-29")`)।
+- `start_time`: मैच शुरू होने का समय (उदाहरण: `Time.parse("2025-05-29 09:00:00")`)।
+- `end_time`: मैच खत्म होने का समय (उदाहरण: `Time.parse("2025-05-29 10:00:00")`)।
 - `duration`: मैच की अवधि मिनटों में (उदाहरण: `60`)।
 
 #### उदाहरण आउटपुट
 ```ruby
 [
-  { home: "Team 1", away: "Team 2", resource: "Court 1", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
-  { home: "Team 3", away: "Team 4", resource: "Court 2", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
-  { home: "Team 1", away: "Team 3", resource: "Court 3", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
-  { home: "Team 2", away: "Team 4", resource: "Court 4", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 10:00:00"), end_time: Time.parse("2025-05-05 11:00:00"), duration: 60 },
-  { home: "Team 1", away: "Team 4", resource: "Court 1", date: Date.parse("2025-05-05"), start_time: Time.parse("2025-05-05 11:00:00"), end_time: Time.parse("2025-05-05 12:00:00"), duration: 60 }
+  { home: "Team 1", away: "Team 2", resource: "Court 1", date: Date.parse("2025-05-29"), start_time: Time.parse("2025-05-29 09:00:00"), end_time: Time.parse("2025-05-29 10:00:00"), duration: 60 },
+  { home: "Team 3", away: "Team 4", resource: "Court 2", date: Date.parse("2025-05-29"), start_time: Time.parse("2025-05-29 09:00:00"), end_time: Time.parse("2025-05-29 10:00:00"), duration: 60 },
+  { home: "Team 1", away: "Team 3", resource: "Court 1", date: Date.parse("2025-05-29"), start_time: Time.parse("2025-05-29 10:00:00"), end_time: Time.parse("2025-05-29 11:00:00"), duration: 60 },
+  { home: "Team 2", away: "Team 4", resource: "Court 2", date: Date.parse("2025-05-29"), start_time: Time.parse("2025-05-29 10:00:00"), end_time: Time.parse("2025-05-29 11:00:00"), duration: 60 }
 ]
 ```
 - वैकल्पिक रूप से, प्रत्येक शेड्यूल किया गया मैच `events` टेबल में स्टोर किया जा सकता है।
@@ -111,40 +112,9 @@ league_params = {
   resources: ["Court 1", "Court 2"],
   team_can_play: 5,
   games: "weekly",
-  double_headers: {apply: true, same_resource: true},
-  teams_availability_or_not: [
-    {
-      team_name: 'Team 1',
-      availabilities: [
-        {
-          day: ['Monday'],
-          from: '10:00 AM',
-          till: '12:00 PM',
-          effective_from: '2025-05-05',
-          repeats: 'weekly',
-          can_play: true
-        }
-      ],
-      resources: ['Court 1'],
-      cannot_play_against: [],
-      cannot_play_at_same_time_as_another_team: []
-    }
-  ],
-  resources_availability_or_not: [
-    {
-      resource_name: "Court 1",
-      availabilities: [
-        {
-          day: ["Monday"],
-          from: "10:00 AM",
-          till: "12:00 PM",
-          effective_from: "2025-05-05",
-          repeats: "weekly",
-          can_play: true
-        }
-      ]
-    }
-  ]
+  double_headers: {apply: true, force: true, same_resource: true},
+  teams_availability_or_not: [],
+  resources_availability_or_not: []
 }
 ```
 - **विवरण**:
@@ -152,13 +122,28 @@ league_params = {
   - 4 टीमें (`Team 1`, `Team 2`, `Team 3`, `Team 4`), प्रत्येक को कम से कम 2 मैच खेलने हैं।
   - प्रत्येक मैच 60 मिनट का होगा।
   - संसाधन: `Court 1` और `Court 2`। मैच यथासंभव बराबर शेड्यूल होंगे।
-  - **Team 1**: केवल Monday को 10:00 AM से 12:00 PM तक उपलब्ध, 2025-05-05 से शुरू होकर हर हफ्ते। केवल `Court 1` पर खेल सकती है।
-  - **Team 2, Team 3, Team 4**: रोज़ 9:00 AM से 5:00 PM तक उपलब्ध, किसी भी संसाधन पर खेल सकती हैं।
-  - **Court 1**: केवल Monday को 10:00 AM से 12:00 PM तक उपलब्ध, 2025-05-05 से शुरू होकर हर हफ्ते।
-  - **Court 2**: रोज़ 9:00 AM से 5:00 PM तक उपलब्ध।
-  - डबल हेडर्स लागू होंगे, और बैक-टू-बैक मैच एक ही संसाधन पर होंगे।
+  - **Team 1, Team 2, Team 3, Team 4**: रोज़ 9:00 AM से 5:00 PM तक उपलब्ध, किसी भी संसाधन पर खेल सकती हैं।
+  - **Court 1, Court 2**: रोज़ 9:00 AM से 5:00 PM तक उपलब्ध।
+  - डबल हेडर्स अनिवार्य हैं (`apply: true, force: true`), और बैक-टू-बैक मैच एक ही संसाधन पर होंगे (`same_resource: true`)।
   - प्रत्येक टीम एक हफ्ते में अधिकतम 5 मैच खेल सकती है।
   - प्रत्येक मैच को शेड्यूल करने से पहले, `events` टेबल में होम टीम, अवे टीम, और संसाधन की उपलब्धता चेक की जाएगी।
 
+#### उदाहरण आउटपुट (डबल हेडर के साथ)
+```ruby
+[
+  { home: "Team 1", away: "Team 2", resource: "Court 1", date: Date.parse("2025-05-29"), start_time: Time.parse("2025-05-29 09:00:00"), end_time: Time.parse("2025-05-29 10:00:00"), duration: 60 },
+  { home: "Team 1", away: "Team 3", resource: "Court 1", date: Date.parse("2025-05-29"), start_time: Time.parse("2025-05-29 10:00:00"), end_time: Time.parse("2025-05-29 11:00:00"), duration: 60 },
+  { home: "Team 2", away: "Team 4", resource: "Court 2", date: Date.parse("2025-05-29"), start_time: Time.parse("2025-05-29 09:00:00"), end_time: Time.parse("2025-05-29 10:00:00"), duration: 60 },
+  { home: "Team 2", away: "Team 3", resource: "Court 2", date: Date.parse("2025-05-29"), start_time: Time.parse("2025-05-29 10:00:00"), end_time: Time.parse("2025-05-29 11:00:00"), duration: 60 }
+]
+```
+- **विवरण**:
+  - प्रत्येक टीम के 2 मैच बैक-टू-बैक शेड्यूल किए गए हैं:
+    - `Team 1`: 9:00 AM और 10:00 AM (`Court 1` पर)।
+    - `Team 2`: 9:00 AM और 10:00 AM (`Court 2` पर)।
+  - `Team 3` और `Team 4` के मैच भी बैक-टू-बैक हैं, लेकिन अलग-अलग संसाधनों पर।
+  - संसाधन उपयोग: `Court 1` (2 मैच), `Court 2` (2 मैच)।
+  - `force: true` के कारण, सिस्टम ने सुनिश्चित किया कि प्रत्येक टीम के मैच बैक-टू-बैक हैं।
+
 ## निष्कर्ष
-यह दस्तावेज लीग मैच शेड्यूलिंग की सभी आवश्यकताओं को स्पष्ट रूप से प्रस्तुत करता है। सिस्टम को उपलब्धता नियमों, डबल हेडर्स, संसाधन उपयोग, और `events` टेबल में टकराव चेक को ध्यान में रखते हुए न्यूनतम मैच सुनिश्चित करना होगा। AI या डेवलपर इस दस्तावेज का उपयोग करके एक प्रभावी शेड्यूलिंग समाधान बना सकते हैं।
+यह दस्तावेज लीग मैच शेड्यूलिंग की सभी आवश्यकताओं को स्पष्ट रूप से प्रस्तुत करता है। सिस्टम को उपलब्धता नियमों, डबल हेडर्स (अनिवार्य या वैकल्पिक), संसाधन उपयोग, और `events` टेबल में टकराव चेक को ध्यान में रखते हुए न्यूनतम मैच सुनिश्चित करना होगा। AI या डेवलपर इस दस्तावेज का उपयोग करके एक प्रभावी शेड्यूलिंग समाधान बना सकते हैं।

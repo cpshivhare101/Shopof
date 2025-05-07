@@ -7,6 +7,10 @@
 - प्रत्येक टीम कम से कम `min_games_per_team` मैच खेले।
 - मैचों को `league_start_date` से शुरू करके `end_date` तक जल्द से जल्द शेड्यूल करना।
 - संसाधनों (`resources`) का उपयोग यथासंभव बराबर करना, लेकिन यह अनिवार्य नहीं।
+If we have 2 resources and 4 matches the 2 matches will be play on resource 1  and 2 matches will be play on resorce 2.
+if we have 5 matches then 3 match with any one resource and 2 match with any sec resource.
+but it is not working,
+only minimum code update not whole service,  what is requird changes only
 - अगर केवल दो टीमें हैं, तो वे एक-दूसरे के खिलाफ बार-बार खेल सकती हैं।
 - बिना `number_of_teams` और `resources` के शेड्यूलिंग संभव नहीं।
 

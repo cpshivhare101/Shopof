@@ -171,6 +171,23 @@ league_params = {
 - डबल हेडर्स अक्षम हैं (`apply: false`)।
 - प्रत्येक टीम एक दिन में अधिकतम 3 मैच खेल सकती है (`team_can_play: 3`)।
 - प्रत्येक मैच को शेड्यूल करने से पहले, `events` टेबल में होम टीम, अवे टीम, और संसाधन की उपलब्धता चेक की जाएगी।
+- Also one twist are here.
+if weekly is three matchase can be schedule. it means. We can try each monday to sunday.
+suppose we schedule tuesday 2 game and 1 is remaning then we can schedule one match wednes day. also it's for each team. 
+The matches can be schedule any of day monday to sunday for week.
+and for month it can be schedule 1..last date of month date any of date.
+example: 
+ team_can_play: 2,
+      games: "weekly",
+it means, each week monday to sunday can be schedule only 2 matches for each team.
+example: 
+ team_can_play: 2,
+      games: "weekly",
+it means, each ,month 1 to  last date  of month can be schedule 2  only matches for each team.
+
+
+
+
 
 ## न्यूनतम और अधिकतम मैच
 - प्रत्येक टीम को कम से कम `min_games_per_team` मैच खेलने हैं।

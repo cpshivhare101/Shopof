@@ -321,5 +321,18 @@ it means, each ,month 1 to  last date  of month can be schedule 2  only matches 
   ```
   - परिणाम: Team 1 और Team 2 के मैच एक ही समय पर शेड्यूल नहीं होंगे।
 
+- Remember thesese points as well.
+Resource:
+- A resource can be used in only one match at a time — it cannot be shared across multiple matches simultaneously.
+For example, if a match is ongoing on resource 'Court 1', no other match can be scheduled at the same time on 'Court 1'.
+
+- Use resources as equally as possible, but it's not mandatory.
+EX.
+If we have 2 resources and 4 matches, then 2 matches should be played on resource 1 and 2 matches on resource 2.
+If we have 5 matches, then 3 matches on any one resource and 2 on the other.
+- Resource can be used only if it's available. 
+Ex. Need to check availibility in Events table too. 
+
+
 ## निष्कर्ष
 यह दस्तावेज़ लीग मैच शेड्यूलिंग की सभी आवश्यकताओं को स्पष्ट रूप से प्रस्तुत करता है। सिस्टम को उपलब्धता नियमों, डबल हेडर्स, संसाधन उपयोग, `cannot_play_at_same_time_as_another_team`, और `events` टेबल में टकराव चेक को ध्यान में रखते हुए न्यूनतम मैच सुनिश्चित करना होगा। `can_play: false` नियम अब प्रत्येक निर्दिष्ट दिन (जैसे प्रत्येक सोमवार) पर समय स्लॉट को ब्लॉक करते हैं, बशर्ते तारीख `effective_from` के बराबर या उससे अधिक हो, जिससे भ्रांति दूर होती है। डिफॉल्ट उपलब्धता (9:00 AM से 5:00 PM, डेली) सुनिश्चित करती है कि शेड्यूलिंग सटीक हो। AI या डेवलपर इस दस्तावेज़ का उपयोग करके एक प्रभावी शेड्यूलिंग समाधान बना सकते हैं।
